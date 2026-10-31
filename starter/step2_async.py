@@ -18,14 +18,17 @@ import asyncio
 from timer import print_time
 
 
-def work(n: int) -> None:
-    ...
+async def work(n: int) -> None:
+    print(f"start {n}")
+    await asyncio.sleep(1)
+    print(f"done {n}")
 
 
-def main() -> None:
-    ...
+async def main() -> None:
+    coroutines = [work(n) for n in range(1, 11)]
+    await asyncio.gather(*coroutines)
 
 
 if __name__ == "__main__":
     with print_time():
-        main()
+        asyncio.run(main())
