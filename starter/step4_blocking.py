@@ -1,30 +1,19 @@
-"""Шаг 4 (дополнительный). Блокировка event loop.
+"""Шаг 4: сравнение блокировки, потока и процессов.
 
-Ниже готовый асинхронный сервер из шага 3б. Но теперь клиент "bob"
-прислал не запрос в базу, а задачу на тяжёлые вычисления: функция
-heavy_compute. Она синхронная и работает 1-3 секунды в зависимости от машины.
+Запуск из корня проекта:
+    .venv/bin/python starter/step4_blocking.py --mode blocking
+    .venv/bin/python starter/step4_blocking.py --mode thread
+    .venv/bin/python starter/step4_blocking.py --mode process
+    .venv/bin/python starter/step4_blocking.py --mode thread --heavy three
+    .venv/bin/python starter/step4_blocking.py --mode process --heavy three
 
-Задание 4а:
-  В handle_request для клиента "bob" вызовите heavy_compute()
-  вместо await asyncio.sleep(duration). Остальные клиенты по-прежнему
-  ждут через asyncio.sleep. Запустите.
-  Что произошло с остальными клиентами? Почему, ведь всё написано на async?
-
-Задание 4б:
-  Исправьте так, чтобы остальные клиенты не ждали bob. Два инструмента:
-    await asyncio.to_thread(heavy_compute)
-    await loop.run_in_executor(pool, heavy_compute)
-  где loop = asyncio.get_running_loop(), а pool — это ProcessPoolExecutor
-  из concurrent.futures, открытый через with в main.
-  Попробуйте оба. Порядок строк в выводе должен стать как в шаге 3б,
-  время bob зависит от машины.
-
-Задание 4в (если осталось время):
-  Сделайте тяжёлыми трёх клиентов: bob, dave и eve. Сравните общее время
-  для to_thread и для пула процессов. Почему оно отличается? Вспомните GIL.
+По умолчанию тяжёлый только bob. В режиме three тяжёлые bob, dave и eve.
+Время вычислений зависит от компьютера и числа доступных процессоров.
 """
 
+import argparse
 import asyncio
+from concurrent.futures import ProcessPoolExecutor
 
 from timer import log, print_time
 
@@ -45,17 +34,52 @@ def heavy_compute() -> int:
     return h
 
 
-async def handle_request(client: str, duration: float) -> None:
+async def handle_request(
+    client: str,
+    duration: float,
+    heavy_clients: set[str],
+    mode: str,
+    pool: ProcessPoolExecutor | None,
+) -> None:
     log(f"{client}: запрос принят")
-    await asyncio.sleep(duration)
+    if client not in heavy_clients:
+        await asyncio.sleep(duration)
+    elif mode == "blocking":
+        heavy_compute()
+    elif mode == "thread":
+        await asyncio.to_thread(heavy_compute)
+    else:
+        if pool is None:
+            raise RuntimeError("Для режима process нужен пул процессов")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(pool, heavy_compute)
     log(f"{client}: ответ отправлен")
 
 
-async def main() -> None:
-    coroutines = [handle_request(client, duration) for client, duration in CLIENTS]
+async def run_requests(
+    mode: str, heavy_clients: set[str], pool: ProcessPoolExecutor | None
+) -> None:
+    coroutines = [
+        handle_request(client, duration, heavy_clients, mode, pool)
+        for client, duration in CLIENTS
+    ]
     await asyncio.gather(*coroutines)
 
 
+async def main(mode: str, heavy: str) -> None:
+    heavy_clients = {"bob"} if heavy == "bob" else {"bob", "dave", "eve"}
+    if mode == "process":
+        with ProcessPoolExecutor(max_workers=len(heavy_clients)) as pool:
+            await run_requests(mode, heavy_clients, pool)
+    else:
+        await run_requests(mode, heavy_clients, None)
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("blocking", "thread", "process"), default="blocking")
+    parser.add_argument("--heavy", choices=("bob", "three"), default="bob")
+    args = parser.parse_args()
+    print(f"Режим: {args.mode}; тяжёлые клиенты: {args.heavy}")
     with print_time():
-        asyncio.run(main())
+        asyncio.run(main(args.mode, args.heavy))
